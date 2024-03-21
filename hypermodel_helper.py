@@ -162,7 +162,10 @@ def record_history_values(hypermodel, model, history_dict, metric_name, mode, fo
     fold_metric_copy = fold_metric.copy()
                 
     #Record the result of fold-cv in a dictionary provided to the hypermodel.fit for debugging/graphing
-    fold_metric_copy["final_bias"] = model.get_config()["layers"][-1]["config"]["bias_initializer"]["config"]["value"]
+    if "value" in model.get_config()["layers"][-1]["config"]["bias_initializer"]["config"]:
+        fold_metric_copy["final_bias"] = model.get_config()["layers"][-1]["config"]["bias_initializer"]["config"]["value"]
+    else:
+        fold_metric_copy["final_bias"] = None
     fold_metric_copy["best_epoch"] = index + 1
     
     #Check if the text results exists otherwise make it

@@ -28,7 +28,7 @@ from hypermodel_experiments import get_predefined_training_testing_indeces_30_pe
 from hypermodel_experiments import record_training_testing_indeces
 from clinical_score import ClinicalScore
 
-from statistical_tests import correct_p_values, plot_p_value_heatmap
+from statistical_tests import correct_p_values, plot_p_value_heatmap, compare_estimates_t_statistics
 
 model_dict = {
     "All_models": ["Baseline_Dense", "FUP_RNN", "LastFUP_Dense", "Ensemble", 'CHAP','ACCP','RIETE','VTE-BLEED','HAS-BLED','OBRI'],
@@ -963,37 +963,46 @@ def mcnemar_analysis():
                             corrected=True, exact=True)
             stat_test_results.loc[model_1, model_2] = "{:.2e}".format(p_value)
             
+   
+    #Find the order of models from highest to lowest accuracy
+    #This is so that we can build a top diagonal matrix for p-values
+    accuracy_dict = dict()
+      
+    for model_name in model_dict["All_models"]:
+        detailed_test_res = pd.read_csv(f"./keras_tuner_results/{model_name}/{model_name}_detailed_test_results.csv")
+            
+        y_pred_classes = np.array(detailed_test_res["y_pred_classes"])
+        y_pred = np.array(detailed_test_res["y_pred"])
+        y_actual = np.array(detailed_test_res["y_actual"])
+                
+        tp = np.where((y_pred_classes==1)&(y_actual==1) , 1, 0).sum().astype("float32")
+        fp = np.where((y_pred_classes==1)&(y_actual==0) , 1, 0).sum().astype("float32")
+        fn = np.where((y_pred_classes==0)&(y_actual==1) , 1, 0).sum().astype("float32")
+        tn = np.where((y_pred_classes==0)&(y_actual==0) , 1, 0).sum().astype("float32")
+        
+        accuracy = (tn+tp)/(tn+tp+fp+fn)
+        
+        accuracy_dict[model_name] = accuracy
+
+    accuracy_dict = dict(sorted(accuracy_dict.items(), key=lambda item: item[1], reverse=True))
+    row_order = list(accuracy_dict.keys())
+    row_order = [model_paper_dic[val] for val in row_order]
+    
+    #Correct the order of stat test results
+    stat_test_results = stat_test_results.reindex(row_order)
+    stat_test_results = stat_test_results[row_order[::-1]] #Reverse the row order
+                
     #Correct p-values for multiple hypothesis testing
     stat_test_results_corrected, multitest_correction = correct_p_values(stat_test_results, multitest_correction="fdr_bh")
     
+    #Remove the last row and the last column of the p-value tables becuase they are redundant
+    stat_test_results_corrected = stat_test_results_corrected.drop(stat_test_results_corrected.columns[-1], axis=1)
+    stat_test_results_corrected = stat_test_results_corrected.drop(stat_test_results_corrected.index[-1], axis=0)  
+    
     #Plot the hitmap of the corrected p_values
-    plot_p_value_heatmap(stat_test_results_corrected, effect_size_df=None, title="McNemar test",
+    plot_p_value_heatmap(stat_test_results_corrected, title="McNemar test",
                          save_path="./results_pics/", multitest_correction=multitest_correction, 
                      omnibus_p_value=f"Cochran q: {p_value_cochrane}", plot_name="McNemar")
-            
-
-    #Plot the hitmap for the uncorrected p-values
-    fig, ax = plt.subplots(figsize=(9.5,6))
-
-    cmap = (colors.ListedColormap(['#20e84f', '#abf5bc', '#f2d666'])
-            .with_extremes(over='9e-3', under='9e-4'))
-
-    bounds = [9.09e-50, 9.09e-04, 9.09e-03, 1.01]
-    norm = colors.BoundaryNorm(bounds, cmap.N)
-
-    mask = np.zeros_like(stat_test_results, dtype=bool)
-    mask[np.triu_indices_from(mask)] = True
-
-
-    sns.heatmap(stat_test_results.astype(float),annot=True, cmap=cmap, norm=norm,fmt=".2e", annot_kws={"fontsize":9}, 
-                square=False,linewidths=.7, ax=ax, cbar=True, cbar_kws={'format': '%.2e', 'label':"$\it{p}$-value", "shrink": 0.75},
-                mask=mask)
-
-
-
-    ax.set_title(f"Cochrane's Q test p-value is {p_value_cochrane:.3g}")
-
-    plt.savefig("./results_pics/mcnemar_uncorrected.pdf", transparent=False, bbox_inches="tight") 
     
 
 def plot_FUP_RNN_probabilities_output():
@@ -1208,7 +1217,112 @@ def get_clinical_scores_performance():
 
         #Save the detailed results
         pd.DataFrame(record_dict).to_csv(f"keras_tuner_results/{model_name}/{model_name}_detailed_test_results.csv")    
-               
+
+def statistical_comparison_AUROC_AUPRC():
+    """Corrects and visualizes the results of the Delong test. Perform comparison for AUPRC.
+    """
+    
+    #Note: Delong test must be done in R. 
+    if not os.path.isfile("./keras_tuner_results/delong_test_not_corrected.csv"):
+        raise(ValueError("Delong test must be done in R prior to running this function."))
+    
+    #Read the data produced from R
+    delong_data = pd.read_csv("./keras_tuner_results/delong_test_not_corrected.csv", index_col=0)
+    
+    #Modify the names slightly as they are in the paper.
+    delong_data.columns = [model_paper_dic[val] for val in delong_data.columns]
+    delong_data.index = [model_paper_dic[val] for val in delong_data.index]
+    
+    #Find the order of models from highest to lowest AUROC
+    #This is to add top left diagonal heatmap
+    roc_auc_dict = dict()
+      
+    for model_name in model_dict["All_models"]:
+        detailed_test_res = pd.read_csv(f"./keras_tuner_results/{model_name}/{model_name}_detailed_test_results.csv")
+        
+        y_pred = np.array(detailed_test_res["y_pred"])
+        y_actual = np.array(detailed_test_res["y_actual"])
+        tp_list, fp_list, fn_list, tn_list, _, _, _ = calc_PR_ROC_from_y_pred(y_pred, y_actual)
+        
+        ROC_AUC, _ = get_auc_using_tf(tn_list, tp_list, fn_list, fp_list)
+        
+        roc_auc_dict[model_name] = ROC_AUC
+
+    roc_auc_dict = dict(sorted(roc_auc_dict.items(), key=lambda item: item[1], reverse=True))
+    row_order = list(roc_auc_dict.keys())
+    row_order = [model_paper_dic[val] for val in row_order]
+    
+    #Correct the order of stat test results
+    delong_data = delong_data.reindex(row_order)
+    delong_data = delong_data[row_order[::-1]] #Reverse the row order
+        
+    #Correct the p-values
+    corected_delong_p_values, multitest_method = correct_p_values(delong_data, multitest_correction='fdr_bh')
+    
+    #Remove last row and last column (redundant info)
+    corected_delong_p_values = corected_delong_p_values.drop(corected_delong_p_values.columns[-1], axis=1)
+    corected_delong_p_values = corected_delong_p_values.drop(corected_delong_p_values.index[-1], axis=0)  
+    
+    #Save the data
+    plot_p_value_heatmap(corected_delong_p_values, title="Delong's Test",
+                         save_path="./results_pics/", multitest_correction=multitest_method, 
+                     omnibus_p_value=f"None", plot_name="Delong")
+    
+    ################################################
+    
+    AUPRC_dics = dict()
+    
+    AUPRC_df_pvalues = pd.DataFrame(index = model_dict["All_models"], columns = model_dict["All_models"])
+    
+    for model_name in model_dict["All_models"]:
+        detailed_test_res = pd.read_csv(f"./keras_tuner_results/{model_name}/{model_name}_detailed_test_results.csv")
+            
+        y_pred = np.array(detailed_test_res["y_pred"])
+        y_actual = np.array(detailed_test_res["y_actual"])
+        tp_list, fp_list, fn_list, tn_list, _, _, _ = calc_PR_ROC_from_y_pred(y_pred, y_actual)
+        
+        _, PR_AUC = get_auc_using_tf(tn_list, tp_list, fn_list, fp_list)
+        
+        AUPRC_dics[model_name] = PR_AUC
+        
+    for model1 in AUPRC_dics.keys():
+        for model2 in AUPRC_dics.keys():
+            pval = compare_estimates_t_statistics(value1=AUPRC_dics[model1],
+                                                  value2=AUPRC_dics[model2],
+                                                  num_positives=sum(y_actual),
+                                                  total_sample_size=len(y_actual),
+                                                  mode="binomial")
+            
+            AUPRC_df_pvalues.loc[model1, model2] = pval
+    
+    
+    #Modify the names slightly as they are in the paper.
+    AUPRC_df_pvalues.columns = [model_paper_dic[val] for val in AUPRC_df_pvalues.columns]
+    AUPRC_df_pvalues.index = [model_paper_dic[val] for val in AUPRC_df_pvalues.index]  
+    
+    #Order the AUPRCs in descending order
+    AUPRC_dics = dict(sorted(AUPRC_dics.items(), key=lambda item: item[1], reverse=True))
+    row_order = list(AUPRC_dics.keys())
+    row_order = [model_paper_dic[val] for val in row_order]
+    
+    #Correct the order of stat test results
+    AUPRC_df_pvalues = AUPRC_df_pvalues.reindex(row_order)
+    AUPRC_df_pvalues = AUPRC_df_pvalues[row_order[::-1]] #Reverse the column order
+    
+    
+    #Correct the p-values
+    corected_AUPRC_p_values, multitest_method = correct_p_values(AUPRC_df_pvalues, multitest_correction='fdr_bh')
+    
+    #Remove last row cols
+    corected_AUPRC_p_values = corected_AUPRC_p_values.drop(corected_AUPRC_p_values.columns[-1], axis=1)
+    corected_AUPRC_p_values = corected_AUPRC_p_values.drop(corected_AUPRC_p_values.index[-1], axis=0)  
+    
+    #Save the data
+    plot_p_value_heatmap(corected_AUPRC_p_values, title="AUPRC t-statistics",
+                         save_path="./results_pics/", multitest_correction=multitest_method, 
+                     omnibus_p_value=f"None", plot_name="AUPRC_t_stats")        
+        
+                   
 def main():
     
     create_feature_sets_json()
@@ -1236,6 +1350,8 @@ def main():
     mcnemar_analysis()
     
     plot_FUP_RNN_probabilities_output()
+    
+    statistical_comparison_AUROC_AUPRC()
     
 if __name__=="__main__":
     main()
