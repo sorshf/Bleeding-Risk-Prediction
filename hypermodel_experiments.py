@@ -920,6 +920,8 @@ def run_ensemble_experiment(model_name,
                         ],
                     )
     
+    #Save the ensemble model
+    ensemble_model.save(f"{directory_name}/{model_name}.h5")
     
     #Test on the testing set
     test_res = ensemble_model.evaluate([norm_test_baseline_X, norm_test_fups_X], test_y)
