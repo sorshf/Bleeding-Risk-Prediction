@@ -1,0 +1,9 @@
+,best_hp_value
+num_dense_hidden_layers,2
+hidden_layer_units,40
+regularizer,None
+dropout_rate,0.25
+baseline_feature_set,20_f_classif
+optimizer,Adam
+lr,0.0005
+best_number_of_epochs,12

@@ -1,0 +1,10 @@
+,best_hp_value
+num_LSTM_layers,1
+LSTM_layer_units,50
+regularizer,l1_l2_0.01
+recurrent_dropout_rate,0.25
+final_dropout_rate,0.25
+FUPS_feature_set,all_features
+optimizer,Adam
+lr,0.001
+best_number_of_epochs,38

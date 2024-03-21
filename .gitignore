@@ -1,5 +1,8 @@
 #No folders
-*/
+/*
+
+#Except the results
+!/models_and_results/
 
 #These are to run on the remote server
 *.sh
